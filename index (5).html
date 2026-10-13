@@ -1,0 +1,806 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SmartPark 8085 - Standalone Single File Edition</title>
+  <meta name="description" content="Smart Parking Slot Management System Using the 8085 Microprocessor - Standalone offline runnable HTML file." />
+
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Chart.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- React and ReactDOM CDN -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <!-- Babel Standalone to parse JSX in single file -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&family=Inter:wght@400;500;600;700&display=swap');
+    body {
+      font-family: 'Inter', sans-serif;
+      background-color: #020617;
+      color: #f8fafc;
+    }
+    .font-mono {
+      font-family: 'JetBrains Mono', monospace;
+    }
+    /* Custom scrollbars */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #020617;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #1e293b;
+      border-radius: 3px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #334155;
+    }
+  </style>
+<script src="/_aistudio-iframe.js?v=6634132a"></script></head>
+<body class="bg-slate-950 text-slate-100 min-h-screen">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useMemo, useRef, useCallback } = React;
+
+    // --- 8085 Assembly Code Constant ---
+    const ASSEMBLY_PROGRAM_CODE = `; ======================================================================
+; PROJECT: SMARTPARK 8085 - SMART PARKING SLOT MANAGEMENT SYSTEM
+; TARGET: INTEL 8085 MICROPROCESSOR @ 3.072 MHz
+; MEMORY BASE: 2000H (CODE) | 2050H (SLOT STATUS)
+; INTERFACING: 8255 PROGRAMMABLE PERIPHERAL INTERFACE (PPI)
+; ======================================================================
+
+ORG 2000H
+
+START:
+    LXI SP, 27FFH     ; Initialize Stack Pointer
+    MVI A, 89H        ; 8255 Control Word: Port A/B Out, Port C In
+    OUT 63H           ; Send to Control Port
+
+    ; Initialize 8 Slot Status Bytes (2050H - 2057H)
+    LXI H, 2050H      ; HL -> Slot 1 Status
+    MVI B, 08H        ; B = 8 Slots Loop Counter
+    MVI A, 00H        ; 00H = Available
+INIT_LOOP:
+    MOV M, A          ; Clear slot byte to 00H
+    INX H             ; Advance to next slot address
+    DCR B             ; Decrement counter
+    JNZ INIT_LOOP     ; Repeat until all 8 slots cleared
+
+    MVI A, 08H
+    STA 2058H         ; Total Capacity = 08H
+    STA 205AH         ; Available Count = 08H
+    MVI A, 00H
+    STA 2059H         ; Occupied Count = 00H
+    STA 205BH         ; Error Status = 00H
+
+MAIN_POLL:
+    IN 62H            ; Read Sensor Port C
+    MOV D, A          ; Store in D
+    ANI 01H           ; Mask Bit 0 (Entry IR Sensor)
+    CPI 01H           ; Vehicle at Entry?
+    JZ VEHICLE_ENTRY  ; Handle Entry
+
+    MOV A, D
+    ANI 02H           ; Mask Bit 1 (Exit IR Sensor)
+    CPI 02H
+    JZ VEHICLE_EXIT   ; Handle Exit
+
+    JMP MAIN_POLL     ; Keep polling
+
+VEHICLE_ENTRY:
+    LDA 205AH         ; Load Available Slots
+    CPI 00H           ; Is Lot Full?
+    JZ PARKING_FULL
+
+    LXI H, 2050H      ; HL -> Slot 1
+    MVI C, 01H        ; C = Slot 1 Index
+    MVI B, 08H        ; B = 8 Loops Max
+SCAN_FREE_SLOT:
+    MOV A, M          ; Read slot status byte
+    CPI 00H           ; Is it 00H (Free)?
+    JZ ALLOCATE_SLOT  ; Found first available!
+    INX H             ; Advance pointer
+    INR C             ; Increment slot index
+    DCR B             ; Decrement scan count
+    JNZ SCAN_FREE_SLOT
+    JMP PARKING_FULL
+
+ALLOCATE_SLOT:
+    MVI M, FFH        ; Mark slot as FFH (Occupied)
+    MOV A, C
+    STA 205CH         ; Store allocated slot ID
+    LDA 205AH
+    DCR A             ; Decrement Available count
+    STA 205AH
+    LDA 2059H
+    INR A             ; Increment Occupied count
+    STA 2059H
+    MVI A, 01H        ; Raise Entry Barrier
+    OUT 60H
+    JMP MAIN_POLL
+
+PARKING_FULL:
+    MVI A, FFH
+    STA 205BH         ; Set System Status = FFH
+    MVI A, 80H        ; Activate Alarm / Red LED
+    OUT 61H
+    JMP MAIN_POLL
+
+VEHICLE_EXIT:
+    LXI H, 2050H
+    MOV A, E          ; Departing Slot Index in E
+    DCR A
+    ADD L
+    MOV L, A          ; Point HL directly to slot
+    MVI M, 00H        ; Mark Vacant (00H)
+    LDA 205AH
+    INR A             ; Increment Available
+    STA 205AH
+    LDA 2059H
+    DCR A             ; Decrement Occupied
+    STA 2059H
+    MVI A, 01H        ; Raise Exit Barrier
+    OUT 61H
+    JMP MAIN_POLL
+
+HLT`;
+
+    // --- Viva Voce Questions ---
+    const VIVA_QUESTIONS = [
+      { id: 1, q: "What is the word length and data bus width of Intel 8085?", a: "8-bit word length and 8-bit data bus (D0-D7). It has a 16-bit address bus (A0-A15) which can address up to 64 KB of memory.", k: "8-bit CPU, 16-bit address bus = 64KB RAM/ROM." },
+      { id: 2, q: "Why are AD0-AD7 multiplexed and how are they demultiplexed?", a: "Multiplexing saves pin count on the 40-pin IC. External IC 74LS373 latch demultiplexes lower address lines triggered by the Address Latch Enable (ALE) signal.", k: "ALE signal latches lower address into IC 74LS373." },
+      { id: 3, q: "How does SmartPark 8085 allocate slots using linear scan?", a: "Memory locations 2050H-2057H hold the 8 slot states. The HL register pair scans from 2050H upward, testing each byte with CPI 00H. The first 00H byte found is marked FFH (First-Fit).", k: "First-Fit linear search via HL pointer guarantees closest bay allocation." },
+      { id: 4, q: "What happens when all 8 slots are occupied?", a: "The CPU checks available counter at 205AH with CPI 00H. If Z=1 (Zero flag set), execution jumps to PARKING_FULL, raising error FFH and triggering an audio-visual alarm while locking the gate.", k: "CPI 00H sets Zero flag Z=1, triggering gate lockdown." },
+      { id: 5, q: "What is the 8255 PPI and its control word in this project?", a: "The 8255 provides 24 I/O pins. In Mode 0, Port A=Output (Entry gate), Port B=Output (Exit gate + buzzer), and Port C=Input (IR sensors). Control word is 89H written to port 63H.", k: "Control word 89H configures Port A/B as output and Port C as input." },
+      { id: 6, q: "What is the difference between INR and INX in 8085?", a: "INR operates on an 8-bit register and updates Zero, Sign, and Parity flags. INX operates on a 16-bit register pair (e.g., INX H) and does NOT affect any status flags.", k: "INX does not alter Zero flag; INR does." }
+    ];
+
+    // --- Main Standalone App Component ---
+    function App() {
+      const [activeTab, setActiveTab] = useState('dashboard');
+      const [slots, setSlots] = useState(() => {
+        try {
+          const saved = localStorage.getItem('smartpark_8085_standalone_slots');
+          if (saved) return JSON.parse(saved);
+        } catch(e) {}
+        return Array.from({ length: 8 }, (_, i) => ({
+          id: i + 1,
+          label: 'SLOT-' + (i + 1),
+          addressHex: (0x2050 + i).toString(16).toUpperCase() + 'H',
+          isOccupied: false,
+          vehicle: null
+        }));
+      });
+
+      const [history, setHistory] = useState(() => {
+        try {
+          const saved = localStorage.getItem('smartpark_8085_standalone_hist');
+          if (saved) return JSON.parse(saved);
+        } catch(e) {}
+        return [];
+      });
+
+      const [entryPlate, setEntryPlate] = useState('');
+      const [entryType, setEntryType] = useState('Car');
+      const [entryFeedback, setEntryFeedback] = useState(null);
+      const [exitQuery, setExitQuery] = useState('');
+      const [exitFeedback, setExitFeedback] = useState(null);
+      const [currentTime, setCurrentTime] = useState('');
+      const [barrierState, setBarrierState] = useState({ entry: false, exit: false });
+
+      // Simulator State
+      const [simStep, setSimStep] = useState(0);
+      const [simRegs, setSimRegs] = useState({ A: '00H', B: '08H', C: '01H', HL: '2050H', PC: '2000H' });
+      const [simFlags, setSimFlags] = useState({ Z: 0, CY: 0, S: 0, P: 1 });
+      const [simHalted, setSimHalted] = useState(false);
+
+      // Save to localStorage
+      useEffect(() => {
+        localStorage.setItem('smartpark_8085_standalone_slots', JSON.stringify(slots));
+        localStorage.setItem('smartpark_8085_standalone_hist', JSON.stringify(history));
+      }, [slots, history]);
+
+      useEffect(() => {
+        const t = setInterval(() => {
+          setCurrentTime(new Date().toLocaleTimeString('en-US', { hour12: false }));
+        }, 1000);
+        return () => clearInterval(t);
+      }, []);
+
+      const stats = useMemo(() => {
+        const occupied = slots.filter(s => s.isOccupied).length;
+        const available = 8 - occupied;
+        const totalRevenue = history.filter(h => h.type === 'EXIT' && h.fee).reduce((sum, h) => sum + h.fee, 0);
+        return { occupied, available, totalRevenue };
+      }, [slots, history]);
+
+      // Park Vehicle Routine
+      const handlePark = (plate, type = 'Car') => {
+        const clean = plate.trim().toUpperCase();
+        if (!clean || clean.length < 3) {
+          setEntryFeedback({ isError: true, text: 'Invalid plate number (min 3 chars required).' });
+          return;
+        }
+
+        const duplicate = slots.find(s => s.isOccupied && s.vehicle?.id === clean);
+        if (duplicate) {
+          setEntryFeedback({ isError: true, text: 'Duplicate Rejected: Vehicle ' + clean + ' is already in Slot ' + duplicate.id });
+          return;
+        }
+
+        const freeIdx = slots.findIndex(s => !s.isOccupied);
+        if (freeIdx === -1) {
+          setEntryFeedback({ isError: true, text: 'PARKING FULL (CPI 00H): All 8 bays occupied! Barrier locked.' });
+          return;
+        }
+
+        const targetSlot = slots[freeIdx];
+        const updated = [...slots];
+        updated[freeIdx] = {
+          ...targetSlot,
+          isOccupied: true,
+          vehicle: { id: clean, type, entryTime: Date.now() }
+        };
+        setSlots(updated);
+
+        const record = {
+          id: Date.now(),
+          type: 'ENTRY',
+          vehicleId: clean,
+          slotId: targetSlot.id,
+          timestamp: Date.now(),
+          fee: null,
+          message: 'Allocated to ' + targetSlot.label + ' (' + targetSlot.addressHex + '). Barrier opened.'
+        };
+        setHistory([record, ...history]);
+        setEntryFeedback({ isError: false, text: 'Entry Approved: ' + clean + ' -> Slot ' + targetSlot.id + ' (' + targetSlot.addressHex + ')' });
+        setEntryPlate('');
+        setBarrierState(prev => ({ ...prev, entry: true }));
+        setTimeout(() => setBarrierState(prev => ({ ...prev, entry: false })), 2500);
+      };
+
+      // Exit Vehicle Routine
+      const handleExit = (query) => {
+        const clean = String(query).trim().toUpperCase();
+        let targetSlot = slots.find(s => s.isOccupied && s.vehicle?.id === clean);
+        if (!targetSlot) {
+          const num = parseInt(clean.replace(/\D/g, ''), 10);
+          if (num >= 1 && num <= 8) targetSlot = slots.find(s => s.id === num && s.isOccupied);
+        }
+
+        if (!targetSlot || !targetSlot.isOccupied) {
+          setExitFeedback({ isError: true, text: 'Vehicle / Slot not found in active parking list!' });
+          return;
+        }
+
+        const elapsedMins = Math.max(1, Math.round((Date.now() - targetSlot.vehicle.entryTime) / 60000));
+        const fee = Math.max(20, Math.ceil(elapsedMins / 60) * 20);
+
+        const updated = slots.map(s => s.id === targetSlot.id ? { ...s, isOccupied: false, vehicle: null } : s);
+        setSlots(updated);
+
+        const record = {
+          id: Date.now(),
+          type: 'EXIT',
+          vehicleId: targetSlot.vehicle.id,
+          slotId: targetSlot.id,
+          timestamp: Date.now(),
+          fee,
+          message: 'Departed Slot ' + targetSlot.id + '. Duration: ' + elapsedMins + 'm. Tariff: ₹' + fee
+        };
+        setHistory([record, ...history]);
+        setExitFeedback({ isError: false, text: 'Exit Completed: Slot ' + targetSlot.id + ' vacated (00H). Fee: ₹' + fee });
+        setExitQuery('');
+        setBarrierState(prev => ({ ...prev, exit: true }));
+        setTimeout(() => setBarrierState(prev => ({ ...prev, exit: false })), 2500);
+      };
+
+      const handleReset = () => {
+        if (confirm('Hardware Reset: Reset all 8 bays to 00H and restore available count to 08H?')) {
+          setSlots(Array.from({ length: 8 }, (_, i) => ({
+            id: i + 1,
+            label: 'SLOT-' + (i + 1),
+            addressHex: (0x2050 + i).toString(16).toUpperCase() + 'H',
+            isOccupied: false,
+            vehicle: null
+          })));
+          setHistory(prev => [{
+            id: Date.now(),
+            type: 'RESET',
+            vehicleId: 'SYSTEM',
+            slotId: null,
+            timestamp: Date.now(),
+            fee: null,
+            message: 'Hardware CPU Reset: All 8 slots cleared to 00H.'
+          }, ...prev]);
+        }
+      };
+
+      const handleSeed = () => {
+        const now = Date.now();
+        const fresh = Array.from({ length: 8 }, (_, i) => ({
+          id: i + 1,
+          label: 'SLOT-' + (i + 1),
+          addressHex: (0x2050 + i).toString(16).toUpperCase() + 'H',
+          isOccupied: false,
+          vehicle: null
+        }));
+        const samples = [
+          { idx: 0, id: 'MH-12-DE-1085', type: 'Car', mins: 80 },
+          { idx: 1, id: 'DL-01-AB-8085', type: 'SUV', mins: 45 },
+          { idx: 3, id: 'KA-05-ZZ-2024', type: 'Car', mins: 120 },
+          { idx: 5, id: 'TN-07-CS-4096', type: 'Bike', mins: 25 },
+        ];
+        samples.forEach(s => {
+          fresh[s.idx].isOccupied = true;
+          fresh[s.idx].vehicle = { id: s.id, type: s.type, entryTime: now - s.mins * 60000 };
+        });
+        setSlots(fresh);
+      };
+
+      // Simulator Step Logic
+      const handleSimStep = () => {
+        if (simHalted) return;
+        if (simStep === 0) {
+          setSimRegs({ A: '00H', B: '08H', C: '01H', HL: '2050H', PC: '2000H' });
+          setSimStep(1);
+        } else if (simStep === 1) {
+          // LXI H, 2050H
+          setSimRegs(r => ({ ...r, HL: '2050H', PC: '2003H' }));
+          setSimStep(2);
+        } else if (simStep === 2) {
+          // MOV A, M
+          const val = slots[0].isOccupied ? 'FFH' : '00H';
+          setSimRegs(r => ({ ...r, A: val, PC: '2004H' }));
+          setSimStep(3);
+        } else if (simStep === 3) {
+          // CPI 00H
+          const isZero = simRegs.A === '00H';
+          setSimFlags(f => ({ ...f, Z: isZero ? 1 : 0 }));
+          setSimStep(4);
+        } else if (simStep === 4) {
+          if (simFlags.Z === 1) {
+            // JZ ALLOCATE
+            setSimRegs(r => ({ ...r, PC: '2010H' }));
+            setSimHalted(true);
+          } else {
+            // INX H, INR C
+            setSimRegs(r => ({ ...r, HL: '2051H', C: '02H', PC: '2008H' }));
+            setSimStep(2);
+          }
+        }
+      };
+
+      const handleSimReset = () => {
+        setSimStep(0);
+        setSimRegs({ A: '00H', B: '08H', C: '01H', HL: '2050H', PC: '2000H' });
+        setSimFlags({ Z: 0, CY: 0, S: 0, P: 1 });
+        setSimHalted(false);
+      };
+
+      // Render Dynamic Chart on Tab Change
+      useEffect(() => {
+        if (activeTab === 'dashboard') {
+          const ctx = document.getElementById('occupancyChart');
+          if (ctx) {
+            new Chart(ctx, {
+              type: 'bar',
+              data: {
+                labels: slots.map(s => s.label),
+                datasets: [{
+                  label: 'Slot Byte Status (00H=Free, FFH=Occupied)',
+                  data: slots.map(s => s.isOccupied ? 255 : 0),
+                  backgroundColor: slots.map(s => s.isOccupied ? '#f43f5e' : '#10b981'),
+                  borderRadius: 4
+                }]
+              },
+              options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                  y: { min: 0, max: 255, ticks: { callback: v => v === 255 ? 'FFH' : '00H', color: '#94a3b8' } },
+                  x: { ticks: { color: '#94a3b8' } }
+                },
+                plugins: { legend: { display: false } }
+              }
+            });
+          }
+        }
+      }, [activeTab, slots]);
+
+      return (
+        <div className="flex flex-col min-h-screen">
+          {/* Top Navbar */}
+          <header className="sticky top-0 z-50 bg-slate-900 border-b border-cyan-900/60 px-4 py-3 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded bg-cyan-600 flex items-center justify-center font-mono font-bold text-slate-950 text-sm">
+                85
+              </div>
+              <div>
+                <h1 className="font-mono font-bold text-white text-base leading-tight">
+                  SmartPark 8085 <span className="text-xs text-cyan-400 bg-cyan-950 px-1.5 py-0.5 rounded border border-cyan-800">Single File Standalone</span>
+                </h1>
+                <p className="text-[11px] text-slate-400 font-mono hidden sm:block">Intel 8085 CPU & 8255 PPI Smart Parking Simulator</p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 font-mono text-xs">
+              <span className="hidden md:inline text-cyan-400 bg-slate-950 px-2 py-1 rounded border border-slate-800">
+                CLK: 3.072 MHz | {currentTime}
+              </span>
+              <button onClick={handleSeed} className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded border border-slate-700">
+                Seed
+              </button>
+              <button onClick={handleReset} className="px-2.5 py-1 bg-rose-950 hover:bg-rose-900 text-rose-300 rounded border border-rose-800">
+                Reset
+              </button>
+            </div>
+          </header>
+
+          {/* Navigation Bar */}
+          <nav className="bg-slate-950 border-b border-slate-800 px-4 py-2 flex items-center gap-1 overflow-x-auto font-mono text-xs">
+            {[
+              { id: 'dashboard', label: 'Dashboard' },
+              { id: 'slots', label: '8-Bay Lot' },
+              { id: 'gate', label: 'Entry/Exit Gates' },
+              { id: 'history', label: 'Activity Logs' },
+              { id: 'asm', label: '8085 Assembly' },
+              { id: 'sim', label: '8085 CPU Emulator' },
+              { id: 'viva', label: 'Viva Voce (Q&A)' },
+            ].map(tab => (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={'px-3 py-1.5 rounded transition-colors whitespace-nowrap ' + (activeTab === tab.id ? 'bg-cyan-950 text-cyan-300 border border-cyan-800 font-bold' : 'text-slate-400 hover:text-white')}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </nav>
+
+          {/* Main Body */}
+          <main className="flex-1 max-w-6xl w-full mx-auto p-4 sm:p-6 space-y-6">
+            
+            {/* TAB: DASHBOARD */}
+            {activeTab === 'dashboard' && (
+              <div className="space-y-6">
+                {/* Metric Cards */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 font-mono">
+                  <div className="p-4 rounded-xl bg-slate-900 border border-cyan-900/60">
+                    <span className="text-xs text-slate-400">TOTAL BAYS (2058H)</span>
+                    <span className="text-2xl font-bold text-cyan-400 block mt-1">8 Bays</span>
+                    <span className="text-[11px] text-slate-500">Fixed RAM Array</span>
+                  </div>
+                  <div className="p-4 rounded-xl bg-slate-900 border border-emerald-900/60">
+                    <span className="text-xs text-slate-400">AVAILABLE (205AH)</span>
+                    <span className="text-2xl font-bold text-emerald-400 block mt-1">{stats.available} (0{stats.available}H)</span>
+                    <span className="text-[11px] text-slate-500">{stats.available > 0 ? 'Gate Clear' : 'Alarm Active'}</span>
+                  </div>
+                  <div className="p-4 rounded-xl bg-slate-900 border border-rose-900/60">
+                    <span className="text-xs text-slate-400">OCCUPIED (2059H)</span>
+                    <span className="text-2xl font-bold text-rose-400 block mt-1">{stats.occupied} (0{stats.occupied}H)</span>
+                    <span className="text-[11px] text-slate-500">{Math.round((stats.occupied / 8) * 100)}% Saturation</span>
+                  </div>
+                  <div className="p-4 rounded-xl bg-slate-900 border border-slate-800">
+                    <span className="text-xs text-slate-400">TOTAL REVENUE</span>
+                    <span className="text-2xl font-bold text-amber-400 block mt-1">₹{stats.totalRevenue}</span>
+                    <span className="text-[11px] text-slate-500">Tariff ₹20/hr</span>
+                  </div>
+                </div>
+
+                {/* 8-Bay Live Status Preview */}
+                <div className="p-5 rounded-xl bg-slate-900/80 border border-slate-800 space-y-4">
+                  <div className="flex items-center justify-between font-mono text-xs">
+                    <span className="font-bold text-white">8-Bay Real-Time Memory Map (2050H - 2057H)</span>
+                    <span className="text-slate-400">Green = 00H (Available) | Red = FFH (Occupied)</span>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    {slots.map(slot => (
+                      <div
+                        key={slot.id}
+                        className={'p-3 rounded-lg border font-mono text-xs flex flex-col justify-between ' + (slot.isOccupied ? 'bg-rose-950/30 border-rose-800 text-rose-200' : 'bg-emerald-950/30 border-emerald-800 text-emerald-200')}
+                      >
+                        <div className="flex justify-between items-center mb-2">
+                          <span className="font-bold">{slot.label}</span>
+                          <span className="text-[10px] px-1 rounded bg-slate-950 text-cyan-400">{slot.addressHex}</span>
+                        </div>
+                        <div className="my-2">
+                          {slot.isOccupied && slot.vehicle ? (
+                            <div>
+                              <div className="font-bold text-white text-sm">{slot.vehicle.id}</div>
+                              <div className="text-[10px] text-slate-400">{slot.vehicle.type} · Active</div>
+                            </div>
+                          ) : (
+                            <div className="text-slate-500 italic py-1">Vacant (00H)</div>
+                          )}
+                        </div>
+                        {slot.isOccupied && (
+                          <button
+                            onClick={() => handleExit(slot.id)}
+                            className="mt-2 py-1 px-2 text-[10px] bg-rose-900 hover:bg-rose-800 text-white rounded font-bold"
+                          >
+                            Exit Bay
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Chart.js Canvas */}
+                <div className="p-5 rounded-xl bg-slate-900/80 border border-slate-800 font-mono text-xs space-y-3">
+                  <span className="font-bold text-white block">Real-Time Slot Byte Telemetry (Hex / Decimal Status)</span>
+                  <div className="h-48 w-full">
+                    <canvas id="occupancyChart"></canvas>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* TAB: 8-BAY LOT */}
+            {activeTab === 'slots' && (
+              <div className="space-y-4">
+                <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 font-mono text-xs flex justify-between items-center">
+                  <span className="text-white font-bold">Physical Parking Bay Array Layout</span>
+                  <span className="text-cyan-400">First-Fit Lowest Scan Direction &rarr;</span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 font-mono text-xs">
+                  {slots.map(s => (
+                    <div key={s.id} className={'p-4 rounded-xl border ' + (s.isOccupied ? 'bg-rose-950/40 border-rose-800' : 'bg-emerald-950/40 border-emerald-800')}>
+                      <div className="flex justify-between items-center mb-2">
+                        <span className="font-bold text-white text-sm">{s.label}</span>
+                        <span className="text-[10px] bg-slate-950 px-1.5 py-0.5 rounded text-cyan-400">{s.addressHex}</span>
+                      </div>
+                      <div className="py-4 text-center border-y border-slate-800/80 my-2">
+                        {s.isOccupied && s.vehicle ? (
+                          <div>
+                            <span className="text-base font-bold text-white block">{s.vehicle.id}</span>
+                            <span className="text-[11px] text-slate-400">{s.vehicle.type}</span>
+                          </div>
+                        ) : (
+                          <span className="text-emerald-400 font-bold">00H AVAILABLE</span>
+                        )}
+                      </div>
+                      <div className="flex justify-between items-center pt-2">
+                        <span className="text-[10px] text-slate-500">Bit {s.id - 1} of Port C</span>
+                        {s.isOccupied ? (
+                          <button onClick={() => handleExit(s.id)} className="px-2 py-1 bg-rose-600 hover:bg-rose-500 text-white rounded text-xs font-bold">
+                            Free Bay
+                          </button>
+                        ) : (
+                          <span className="text-emerald-400 text-xs">Ready</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* TAB: ENTRY / EXIT GATES */}
+            {activeTab === 'gate' && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 font-mono text-xs">
+                {/* Entry Gate */}
+                <div className="p-5 rounded-xl bg-slate-900 border border-slate-800 space-y-4">
+                  <div className="flex justify-between items-center border-b border-slate-800 pb-3">
+                    <span className="font-bold text-white text-sm">ENTRY GATE (PORT C BIT 0)</span>
+                    <span className={'px-2 py-0.5 rounded font-bold ' + (barrierState.entry ? 'bg-emerald-950 text-emerald-300 border border-emerald-700' : 'bg-slate-950 text-slate-500')}>
+                      BARRIER: {barrierState.entry ? 'UP (90°)' : 'DOWN'}
+                    </span>
+                  </div>
+                  <form onSubmit={e => { e.preventDefault(); handlePark(entryPlate, entryType); }} className="space-y-3">
+                    <div>
+                      <label className="block text-slate-400 mb-1">Vehicle License Plate</label>
+                      <input
+                        type="text"
+                        value={entryPlate}
+                        onChange={e => setEntryPlate(e.target.value.toUpperCase())}
+                        placeholder="e.g. KA-01-AB-1234"
+                        className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded text-white font-mono uppercase focus:outline-none focus:border-cyan-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-slate-400 mb-1">Vehicle Class</label>
+                      <select value={entryType} onChange={e => setEntryType(e.target.value)} className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded text-white font-mono">
+                        <option value="Car">Sedan / Hatchback (Car)</option>
+                        <option value="SUV">SUV / Crossover</option>
+                        <option value="Bike">Motorcycle</option>
+                        <option value="Van">Van / Commercial</option>
+                      </select>
+                    </div>
+                    {entryFeedback && (
+                      <div className={'p-2.5 rounded border ' + (entryFeedback.isError ? 'bg-rose-950/60 border-rose-800 text-rose-300' : 'bg-emerald-950/60 border-emerald-800 text-emerald-300')}>
+                        {entryFeedback.text}
+                      </div>
+                    )}
+                    <button type="submit" disabled={stats.available === 0} className={'w-full py-2.5 rounded font-bold uppercase transition-colors ' + (stats.available === 0 ? 'bg-slate-800 text-slate-500 cursor-not-allowed' : 'bg-cyan-600 hover:bg-cyan-500 text-white')}>
+                      {stats.available === 0 ? 'PARKING FULL (CANNOT ADMIT)' : 'AUTHORIZE ENTRY & RAISE BOOM'}
+                    </button>
+                  </form>
+                </div>
+
+                {/* Exit Gate */}
+                <div className="p-5 rounded-xl bg-slate-900 border border-slate-800 space-y-4">
+                  <div className="flex justify-between items-center border-b border-slate-800 pb-3">
+                    <span className="font-bold text-white text-sm">EXIT GATE (PORT C BIT 1)</span>
+                    <span className={'px-2 py-0.5 rounded font-bold ' + (barrierState.exit ? 'bg-emerald-950 text-emerald-300 border border-emerald-700' : 'bg-slate-950 text-slate-500')}>
+                      BARRIER: {barrierState.exit ? 'UP (90°)' : 'DOWN'}
+                    </span>
+                  </div>
+                  <form onSubmit={e => { e.preventDefault(); handleExit(exitQuery); }} className="space-y-3">
+                    <div>
+                      <label className="block text-slate-400 mb-1">License Plate or Slot #</label>
+                      <input
+                        type="text"
+                        value={exitQuery}
+                        onChange={e => setExitQuery(e.target.value.toUpperCase())}
+                        placeholder="e.g. DL-01-AB-8085 or Slot 2"
+                        className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded text-white font-mono uppercase focus:outline-none focus:border-rose-500"
+                      />
+                    </div>
+                    {exitFeedback && (
+                      <div className={'p-2.5 rounded border ' + (exitFeedback.isError ? 'bg-rose-950/60 border-rose-800 text-rose-300' : 'bg-emerald-950/60 border-emerald-800 text-emerald-300')}>
+                        {exitFeedback.text}
+                      </div>
+                    )}
+                    <button type="submit" disabled={stats.occupied === 0} className={'w-full py-2.5 rounded font-bold uppercase transition-colors ' + (stats.occupied === 0 ? 'bg-slate-800 text-slate-500 cursor-not-allowed' : 'bg-rose-600 hover:bg-rose-500 text-white')}>
+                      {stats.occupied === 0 ? 'NO PARKED VEHICLES' : 'PROCESS EXIT & VACATE SLOT'}
+                    </button>
+                  </form>
+                </div>
+              </div>
+            )}
+
+            {/* TAB: ACTIVITY LOGS */}
+            {activeTab === 'history' && (
+              <div className="p-5 rounded-xl bg-slate-900 border border-slate-800 font-mono text-xs space-y-3">
+                <div className="flex justify-between items-center">
+                  <span className="font-bold text-white text-sm">Entry / Exit Event Telemetry Logs</span>
+                  <span className="text-slate-400">Total Records: {history.length}</span>
+                </div>
+                <div className="overflow-x-auto rounded border border-slate-800 bg-slate-950">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="bg-slate-900 text-slate-400 border-b border-slate-800">
+                        <th className="p-2.5">Time</th>
+                        <th className="p-2.5">Type</th>
+                        <th className="p-2.5">Vehicle</th>
+                        <th className="p-2.5">Slot</th>
+                        <th className="p-2.5 text-right">Fee</th>
+                        <th className="p-2.5">Message</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-900">
+                      {history.length === 0 ? (
+                        <tr><td colSpan="6" className="p-6 text-center text-slate-500">No events recorded yet.</td></tr>
+                      ) : (
+                        history.map(h => (
+                          <tr key={h.id} className="hover:bg-slate-900/50">
+                            <td className="p-2.5 text-slate-400">{new Date(h.timestamp).toLocaleTimeString()}</td>
+                            <td className="p-2.5">
+                              <span className={'px-1.5 py-0.5 rounded text-[10px] font-bold ' + (h.type === 'ENTRY' ? 'bg-emerald-950 text-emerald-400' : 'bg-rose-950 text-rose-400')}>
+                                {h.type}
+                              </span>
+                            </td>
+                            <td className="p-2.5 font-bold text-white">{h.vehicleId}</td>
+                            <td className="p-2.5 text-cyan-400">{h.slotId ? 'Slot ' + h.slotId : '-'}</td>
+                            <td className="p-2.5 text-right font-bold text-emerald-400">{h.fee ? '₹' + h.fee : '-'}</td>
+                            <td className="p-2.5 text-slate-400 truncate max-w-xs">{h.message}</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* TAB: 8085 ASSEMBLY */}
+            {activeTab === 'asm' && (
+              <div className="p-5 rounded-xl bg-slate-900 border border-slate-800 font-mono text-xs space-y-4">
+                <div className="flex justify-between items-center">
+                  <span className="font-bold text-white text-sm">smartpark_8085.asm (Intel 8085 Assembly Code)</span>
+                  <button
+                    onClick={() => { navigator.clipboard.writeText(ASSEMBLY_PROGRAM_CODE); alert('Copied 8085 Assembly Code to Clipboard!'); }}
+                    className="px-3 py-1 bg-cyan-950 border border-cyan-800 text-cyan-300 rounded hover:bg-cyan-900"
+                  >
+                    Copy ASM Code
+                  </button>
+                </div>
+                <pre className="p-4 rounded-lg bg-slate-950 border border-slate-800 text-slate-300 overflow-x-auto max-h-96 leading-relaxed">
+                  {ASSEMBLY_PROGRAM_CODE}
+                </pre>
+              </div>
+            )}
+
+            {/* TAB: 8085 CPU SIMULATOR */}
+            {activeTab === 'sim' && (
+              <div className="p-5 rounded-xl bg-slate-900 border border-slate-800 font-mono text-xs space-y-4">
+                <div className="flex justify-between items-center">
+                  <span className="font-bold text-white text-sm">8085 Educational Pipeline Stepper</span>
+                  <div className="space-x-2">
+                    <button onClick={handleSimStep} disabled={simHalted} className={'px-3 py-1.5 rounded font-bold ' + (simHalted ? 'bg-slate-800 text-slate-600' : 'bg-cyan-600 text-white')}>
+                      {simHalted ? 'HALTED' : 'Step (Next Opcode)'}
+                    </button>
+                    <button onClick={handleSimReset} className="px-3 py-1.5 bg-slate-800 text-slate-300 rounded">
+                      Reset CPU
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+                  <div className="p-3 bg-slate-950 rounded border border-cyan-900">
+                    <span className="text-[10px] text-cyan-400 block">ACCUMULATOR (A)</span>
+                    <span className="text-xl font-bold text-white">{simRegs.A}</span>
+                  </div>
+                  <div className="p-3 bg-slate-950 rounded border border-slate-800">
+                    <span className="text-[10px] text-slate-400 block">REG B (COUNTER)</span>
+                    <span className="text-xl font-bold text-white">{simRegs.B}</span>
+                  </div>
+                  <div className="p-3 bg-slate-950 rounded border border-slate-800">
+                    <span className="text-[10px] text-slate-400 block">REG C (SLOT ID)</span>
+                    <span className="text-xl font-bold text-white">{simRegs.C}</span>
+                  </div>
+                  <div className="p-3 bg-slate-950 rounded border border-cyan-900">
+                    <span className="text-[10px] text-cyan-400 block">HL MEM POINTER</span>
+                    <span className="text-xl font-bold text-cyan-300">{simRegs.HL}</span>
+                  </div>
+                  <div className="p-3 bg-slate-950 rounded border border-slate-800">
+                    <span className="text-[10px] text-slate-400 block">PROGRAM COUNTER</span>
+                    <span className="text-xl font-bold text-emerald-400">{simRegs.PC}</span>
+                  </div>
+                </div>
+
+                <div className="flex gap-4 p-3 bg-slate-950 rounded border border-slate-800">
+                  <span className="text-slate-400">FLAGS:</span>
+                  <span className={simFlags.Z ? 'text-emerald-400 font-bold' : 'text-slate-600'}>Zero (Z): {simFlags.Z}</span>
+                  <span className={simFlags.CY ? 'text-emerald-400 font-bold' : 'text-slate-600'}>Carry (CY): {simFlags.CY}</span>
+                  <span className="text-slate-600">Sign (S): {simFlags.S}</span>
+                  <span className="text-slate-600">Parity (P): {simFlags.P}</span>
+                </div>
+              </div>
+            )}
+
+            {/* TAB: VIVA VOCE */}
+            {activeTab === 'viva' && (
+              <div className="space-y-4 font-mono text-xs">
+                <div className="p-4 rounded-xl bg-slate-900 border border-slate-800">
+                  <span className="font-bold text-white text-sm block mb-1">8085 Microprocessor Viva Voce Questions & Answers</span>
+                  <span className="text-slate-400">Essential oral examination questions for academic lab evaluation.</span>
+                </div>
+                {VIVA_QUESTIONS.map(v => (
+                  <div key={v.id} className="p-4 rounded-xl bg-slate-900/60 border border-slate-800 space-y-2">
+                    <div className="font-bold text-white text-sm">
+                      <span className="text-cyan-400 mr-2">Q{v.id}:</span>{v.q}
+                    </div>
+                    <p className="text-slate-300 leading-relaxed">{v.a}</p>
+                    <div className="p-2 rounded bg-cyan-950/40 border border-cyan-900/60 text-cyan-300 text-[11px]">
+                      <strong>Key Exam Takeaway: </strong>{v.k}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+          </main>
+
+          {/* Footer */}
+          <footer className="border-t border-slate-900 bg-slate-950 p-4 font-mono text-[11px] text-slate-500 text-center">
+            SmartPark 8085 Standalone Single-File Distribution · Runs 100% offline in any modern web browser
+          </footer>
+        </div>
+      );
+    }
+
+    ReactDOM.render(<App />, document.getElementById('root'));
+  </script>
+</body>
+</html>
